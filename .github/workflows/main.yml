@@ -1,58 +1,93 @@
-name: Process and Upload Images
+name: Intelligent WebP Image Conversion
 
 on:
   push:
-    branches:
-      - main
     paths:
-      - '**/*.jpg'
-      - '**/*.png'
-      - '**/*.jpeg'
-      - '**/*.gif'
-      - '**/*.webp'
+      - '**.png'
+      - '**.jpg'
+      - '**.jpeg'
+      - '**.tiff'
+      - '**.bmp'
 
 jobs:
-  upload-images:
+  convert-images:
     runs-on: ubuntu-latest
-    
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: '18'
-
-      - name: Install dependencies
+      - name: Set up ImageMagick and WebP
         run: |
           sudo apt-get update
-          sudo apt-get install -y webp imagemagick
-          npm install axios glob sharp winston image-size color-thief-node
+          sudo apt-get install -y imagemagick webp
 
-      - name: Process Images
-        env:
-          FIVERR_API_KEY: ${{ secrets.FIVERR_API_KEY }}
+      - name: Convert images to WebP with dynamic quality
         run: |
-          node -e "
-            const { processImages } = require('./image-processor.js');
-            processImages(process.env.FIVERR_API_KEY);
-          "
+          #!/bin/bash
+          
+          # Function to determine quality based on image size
+          get_quality() {
+            local img_path="$1"
+            local img_size=$(stat -c%s "$img_path")
+            
+            # Size thresholds (in bytes)
+            local small_threshold=$((100 * 1024))    # 100 KB
+            local medium_threshold=$((1 * 1024 * 1024))   # 1 MB
+            local large_threshold=$((5 * 1024 * 1024))    # 5 MB
+            
+            # Quality levels
+            local small_quality=85
+            local medium_quality=75
+            local large_quality=65
+            local xlarge_quality=55
+            
+            if [ $img_size -lt $small_threshold ]; then
+              echo $small_quality
+            elif [ $img_size -lt $medium_threshold ]; then
+              echo $medium_quality
+            elif [ $img_size -lt $large_threshold ]; then
+              echo $large_quality
+            else
+              echo $xlarge_quality
+            fi
+          }
+          
+          # Find and convert image files to WebP
+          find . \( -name "*.png" -o -name "*.jpg" -o -name "*.jpeg" -o -name "*.tiff" -o -name "*.bmp" \) -not -path "*/\.git/*" | while read -r img; do
+            # Skip if file doesn't exist
+            [ -f "$img" ] || continue
+            
+            # Generate WebP filename
+            webp_img="${img%.*}.webp"
+            
+            # Determine quality dynamically
+            quality=$(get_quality "$img")
+            
+            # Get image dimensions
+            dimensions=$(identify -format "%wx%h" "$img")
+            
+            # Convert image to WebP with dynamic quality
+            convert "$img" -quality "$quality" -define webp:lossless=false "$webp_img"
+            
+            # Print conversion details
+            original_size=$(stat -c%s "$img")
+            webp_size=$(stat -c%s "$webp_img")
+            compression_ratio=$(echo "scale=2; ($original_size - $webp_size) / $original_size * 100" | bc)
+            
+            echo "Converted: $img"
+            echo "  - Original size: $(($original_size / 1024)) KB"
+            echo "  - WebP size: $(($webp_size / 1024)) KB"
+            echo "  - Compression: $compression_ratio%"
+            echo "  - Quality: $quality"
+            echo "  - Dimensions: $dimensions"
+          done
 
-      - name: Upload processing artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: image-processing-artifacts
-          path: |
-            *.log
-            processing-report.json
-
-      - name: Commit updated mappings
+      - name: Commit converted images
         run: |
-          git config --local user.email "github-actions[bot]@users.noreply.github.com"
-          git config --local user.name "github-actions[bot]"
-          git add image-mappings.json
-          git commit -m "Update image mappings" || echo "No changes to commit"
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action"
+          git add .
+          git diff-index --quiet HEAD || git commit -m "Convert images to WebP with intelligent compression"
           git push

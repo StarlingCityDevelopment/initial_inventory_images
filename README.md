@@ -1,1 +1,0 @@
-# initial_inventory_images
