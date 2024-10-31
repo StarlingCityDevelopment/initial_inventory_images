@@ -85,6 +85,9 @@ jobs:
 
             # Remove image
             rm -Rv "$img"
+
+            # Copy image to online storage
+            cp "$webp_img" "images/"
           done
 
       - name: Commit converted images
