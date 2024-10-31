@@ -23,7 +23,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y imagemagick webp
 
-      - name: Convert images to WebP with dynamic quality
+      - name: Convert images to WebP and remove originals
         run: |
           #!/bin/bash
           
@@ -54,6 +54,11 @@ jobs:
             fi
           }
           
+          # Conversion and removal tracking
+          converted_count=0
+          total_original_size=0
+          total_webp_size=0
+          
           # Find and convert image files to WebP
           find . \( -name "*.png" -o -name "*.jpg" -o -name "*.jpeg" -o -name "*.tiff" -o -name "*.bmp" \) -not -path "*/\.git/*" | while read -r img; do
             # Skip if file doesn't exist
@@ -71,23 +76,44 @@ jobs:
             # Convert image to WebP with dynamic quality
             convert "$img" -quality "$quality" -define webp:lossless=false "$webp_img"
             
-            # Print conversion details
-            original_size=$(stat -c%s "$img")
-            webp_size=$(stat -c%s "$webp_img")
-            compression_ratio=$(echo "scale=2; ($original_size - $webp_size) / $original_size * 100" | bc)
-            
-            echo "Converted: $img"
-            echo "  - Original size: $(($original_size / 1024)) KB"
-            echo "  - WebP size: $(($webp_size / 1024)) KB"
-            echo "  - Compression: $compression_ratio%"
-            echo "  - Quality: $quality"
-            echo "  - Dimensions: $dimensions"
+            # Check if conversion was successful
+            if [ -f "$webp_img" ]; then
+              # Get size information
+              original_size=$(stat -c%s "$img")
+              webp_size=$(stat -c%s "$webp_img")
+              compression_ratio=$(echo "scale=2; ($original_size - $webp_size) / $original_size * 100" | bc)
+              
+              # Update tracking variables
+              ((converted_count++))
+              total_original_size=$((total_original_size + original_size))
+              total_webp_size=$((total_webp_size + webp_size))
+              
+              # Print conversion details
+              echo "Converted: $img"
+              echo "  - Original size: $(($original_size / 1024)) KB"
+              echo "  - WebP size: $(($webp_size / 1024)) KB"
+              echo "  - Compression: $compression_ratio%"
+              echo "  - Quality: $quality"
+              echo "  - Dimensions: $dimensions"
+              
+              # Remove original image
+              rm "$img"
+            fi
           done
+          
+          # Print summary
+          echo ""
+          echo "Conversion Summary:"
+          echo "- Total images converted: $converted_count"
+          echo "- Total original size: $((total_original_size / 1024)) KB"
+          echo "- Total WebP size: $((total_webp_size / 1024)) KB"
+          total_compression_ratio=$(echo "scale=2; ($total_original_size - $total_webp_size) / $total_original_size * 100" | bc)
+          echo "- Overall compression: $total_compression_ratio%"
 
       - name: Commit converted images
         run: |
           git config --local user.email "action@github.com"
           git config --local user.name "GitHub Action"
           git add .
-          git diff-index --quiet HEAD || git commit -m "Convert images to WebP with intelligent compression"
+          git diff-index --quiet HEAD || git commit -m "Convert images to WebP and remove originals"
           git push
