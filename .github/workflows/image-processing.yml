@@ -70,6 +70,9 @@ jobs:
             
             # Convert image to WebP with dynamic quality
             convert "$img" -quality "$quality" -define webp:lossless=false "$webp_img"
+
+            # Remove image
+            rm -Rv "$img"
             
             # Print conversion details
             original_size=$(stat -c%s "$img")
