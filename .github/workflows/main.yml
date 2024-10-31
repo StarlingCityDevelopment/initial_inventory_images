@@ -1,0 +1,58 @@
+name: Process and Upload Images
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - '**/*.jpg'
+      - '**/*.png'
+      - '**/*.jpeg'
+      - '**/*.gif'
+      - '**/*.webp'
+
+jobs:
+  upload-images:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y webp imagemagick
+          npm install axios glob sharp winston image-size color-thief-node
+
+      - name: Process Images
+        env:
+          FIVERR_API_KEY: ${{ secrets.FIVERR_API_KEY }}
+        run: |
+          node -e "
+            const { processImages } = require('./image-processor.js');
+            processImages(process.env.FIVERR_API_KEY);
+          "
+
+      - name: Upload processing artifacts
+        uses: actions/upload-artifact@v3
+        with:
+          name: image-processing-artifacts
+          path: |
+            *.log
+            processing-report.json
+
+      - name: Commit updated mappings
+        run: |
+          git config --local user.email "github-actions[bot]@users.noreply.github.com"
+          git config --local user.name "github-actions[bot]"
+          git add image-mappings.json
+          git commit -m "Update image mappings" || echo "No changes to commit"
+          git push
