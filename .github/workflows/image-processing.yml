@@ -21,16 +21,22 @@ jobs:
       - name: Set up ImageMagick and WebP
         run: |
           sudo apt-get update
-          sudo apt-get install -y imagemagick webp
+          sudo apt-get install -y imagemagick webp coreutils
 
       - name: Convert images to WebP and remove originals
+        shell: bash
         run: |
-          #!/bin/bash
-          
+          #!/usr/bin/env bash
+          set -euo pipefail
+
+          # Ensure script can handle spaces and special characters in filenames
+          IFS=$'\n'
+
           # Function to determine quality based on image size
           get_quality() {
             local img_path="$1"
-            local img_size=$(stat -c%s "$img_path")
+            local img_size
+            img_size=$(stat -c%s "$img_path")
             
             # Size thresholds (in bytes)
             local small_threshold=$((100 * 1024))    # 100 KB
@@ -43,77 +49,115 @@ jobs:
             local large_quality=65
             local xlarge_quality=55
             
-            if [ $img_size -lt $small_threshold ]; then
+            if [[ $img_size -lt $small_threshold ]]; then
               echo $small_quality
-            elif [ $img_size -lt $medium_threshold ]; then
+            elif [[ $img_size -lt $medium_threshold ]]; then
               echo $medium_quality
-            elif [ $img_size -lt $large_threshold ]; then
+            elif [[ $img_size -lt $large_threshold ]]; then
               echo $large_quality
             else
               echo $xlarge_quality
             fi
           }
-          
+
           # Conversion and removal tracking
           converted_count=0
           total_original_size=0
           total_webp_size=0
+          skipped_count=0
           
-          # Find and convert image files to WebP
-          find . \( -name "*.png" -o -name "*.jpg" -o -name "*.jpeg" -o -name "*.tiff" -o -name "*.bmp" \) -not -path "*/\.git/*" | while read -r img; do
-            # Skip if file doesn't exist
-            [ -f "$img" ] || continue
-            
+          # Find and process image files
+          while IFS= read -r -d '' img; do
+            # Skip if not a regular file
+            [[ -f "$img" ]] || continue
+
+            # Skip already converted WebP files
+            [[ "$img" == *.webp ]] && continue
+
+            # Attempt to get image info to validate
+            if ! identify "$img" &>/dev/null; then
+              echo "Skipping invalid image: $img"
+              ((skipped_count++))
+              continue
+            fi
+
             # Generate WebP filename
             webp_img="${img%.*}.webp"
             
             # Determine quality dynamically
             quality=$(get_quality "$img")
             
-            # Get image dimensions
-            dimensions=$(identify -format "%wx%h" "$img")
-            
-            # Convert image to WebP with dynamic quality
-            convert "$img" -quality "$quality" -define webp:lossless=false "$webp_img"
-            
-            # Check if conversion was successful
-            if [ -f "$webp_img" ]; then
-              # Get size information
-              original_size=$(stat -c%s "$img")
-              webp_size=$(stat -c%s "$webp_img")
-              compression_ratio=$(echo "scale=2; ($original_size - $webp_size) / $original_size * 100" | bc)
-              
-              # Update tracking variables
-              ((converted_count++))
-              total_original_size=$((total_original_size + original_size))
-              total_webp_size=$((total_webp_size + webp_size))
-              
-              # Print conversion details
-              echo "Converted: $img"
-              echo "  - Original size: $(($original_size / 1024)) KB"
-              echo "  - WebP size: $(($webp_size / 1024)) KB"
-              echo "  - Compression: $compression_ratio%"
-              echo "  - Quality: $quality"
-              echo "  - Dimensions: $dimensions"
-              
-              # Remove original image
-              rm "$img"
+            # Attempt conversion with error handling
+            if convert "$img" -quality "$quality" -define webp:lossless=false "$webp_img"; then
+              # Verify WebP file was created
+              if [[ -f "$webp_img" ]]; then
+                # Get size information
+                original_size=$(stat -c%s "$img")
+                webp_size=$(stat -c%s "$webp_img")
+                
+                # Calculate compression ratio
+                compression_ratio=$(echo "scale=2; ($original_size - $webp_size) / $original_size * 100" | bc)
+                
+                # Update tracking variables
+                ((converted_count++))
+                total_original_size=$((total_original_size + original_size))
+                total_webp_size=$((total_webp_size + webp_size))
+                
+                # Print conversion details
+                echo "Converted: $img"
+                echo "  - Original size: $((original_size / 1024)) KB"
+                echo "  - WebP size: $((webp_size / 1024)) KB"
+                echo "  - Compression: $compression_ratio%"
+                
+                # Remove original image
+                rm "$img"
+              fi
+            else
+              echo "Conversion failed for: $img"
+              ((skipped_count++))
             fi
-          done
+          done < <(find . \( -name "*.png" -o -name "*.jpg" -o -name "*.jpeg" -o -name "*.tiff" -o -name "*.bmp" \) -not -path "*/\.git/*" -print0)
           
           # Print summary
           echo ""
           echo "Conversion Summary:"
           echo "- Total images converted: $converted_count"
+          echo "- Total skipped images: $skipped_count"
           echo "- Total original size: $((total_original_size / 1024)) KB"
           echo "- Total WebP size: $((total_webp_size / 1024)) KB"
-          total_compression_ratio=$(echo "scale=2; ($total_original_size - $total_webp_size) / $total_original_size * 100" | bc)
-          echo "- Overall compression: $total_compression_ratio%"
+          
+          # Only calculate compression ratio if original size is non-zero
+          if [[ $total_original_size -gt 0 ]]; then
+            total_compression_ratio=$(echo "scale=2; ($total_original_size - $total_webp_size) / $total_original_size * 100" | bc)
+            echo "- Overall compression: $total_compression_ratio%"
+          fi
+
+          # Exit with success if at least one image was converted
+          [[ $converted_count -gt 0 ]]
 
       - name: Commit converted images
         run: |
           git config --local user.email "action@github.com"
           git config --local user.name "GitHub Action"
           git add .
-          git diff-index --quiet HEAD || git commit -m "Convert images to WebP and remove originals"
-          git push
+          if [[ -n "$(git status --porcelain)" ]]; then
+            git commit -m "Convert images to WebP and remove originals"
+            git push
+          else
+            echo "No changes to commit"
+          fi
+
+# Optional error handling
+# Uncomment if you want to send a notification on workflow failure
+# - name: Notify on Workflow Failure
+#   if: failure()
+#   uses: actions/github-script@v6
+#   with:
+#     github-token: ${{secrets.GITHUB_TOKEN}}
+#     script: |
+#       github.rest.issues.create({
+#         owner: context.repo.owner,
+#         repo: context.repo.repo,
+#         title: 'WebP Conversion Workflow Failed',
+#         body: 'The WebP conversion workflow encountered an error. Please check the workflow logs.'
+#       })
