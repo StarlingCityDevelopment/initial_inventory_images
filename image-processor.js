@@ -322,7 +322,7 @@ async function processImages(apiKey) {
           const response = await withRetry(() =>
             axios.post('https://api.fivemerr.com/v1/media/images', formData, {
               headers: {
-                'Authorization': `Bearer ${apiKey}`,
+                'Authorization': `${apiKey}`,
                 'Content-Type': 'multipart/form-data'
               }
             })
