@@ -2,12 +2,6 @@ name: Intelligent WebP Image Conversion
 
 on:
   push:
-    paths:
-      - '**.png'
-      - '**.jpg'
-      - '**.jpeg'
-      - '**.tiff'
-      - '**.bmp'
 
 jobs:
   convert-images:
