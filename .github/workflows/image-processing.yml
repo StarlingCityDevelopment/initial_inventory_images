@@ -93,7 +93,7 @@ jobs:
                 echo "Skipping invalid image: $img"
                 ((skipped_count++))
                 continue
-              }
+              fi
 
               # Get quality and convert
               quality=$(get_quality "$img")
