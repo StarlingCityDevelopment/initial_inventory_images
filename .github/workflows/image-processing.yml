@@ -2,12 +2,6 @@ name: Intelligent WebP Image Conversion
 
 on:
   push:
-    paths:
-      - '**.png'
-      - '**.jpg'
-      - '**.jpeg'
-      - '**.tiff'
-      - '**.bmp'
 
 jobs:
   convert-images:
@@ -21,79 +15,144 @@ jobs:
       - name: Set up ImageMagick and WebP
         run: |
           sudo apt-get update
-          sudo apt-get install -y imagemagick webp
+          sudo apt-get install -y imagemagick webp coreutils
 
-      - name: Convert images to WebP with dynamic quality
+      - name: Convert and manage images
+        shell: bash
         run: |
-          #!/bin/bash
+          #!/usr/bin/env bash
+          set -euo pipefail
           
+          # Ensure images directory exists
+          mkdir -p images
+
           # Function to determine quality based on image size
           get_quality() {
             local img_path="$1"
-            local img_size=$(stat -c%s "$img_path")
+            local img_size
+            img_size=$(stat -c%s "$img_path")
             
-            # Size thresholds (in bytes)
-            local small_threshold=$((100 * 1024))    # 100 KB
-            local medium_threshold=$((1 * 1024 * 1024))   # 1 MB
-            local large_threshold=$((5 * 1024 * 1024))    # 5 MB
-            
-            # Quality levels
-            local small_quality=85
-            local medium_quality=75
-            local large_quality=65
-            local xlarge_quality=55
-            
-            if [ $img_size -lt $small_threshold ]; then
-              echo $small_quality
-            elif [ $img_size -lt $medium_threshold ]; then
-              echo $medium_quality
-            elif [ $img_size -lt $large_threshold ]; then
-              echo $large_quality
+            if [[ $img_size -lt $((100 * 1024)) ]]; then
+              echo 85
+            elif [[ $img_size -lt $((1024 * 1024)) ]]; then
+              echo 75
+            elif [[ $img_size -lt $((5 * 1024 * 1024)) ]]; then
+              echo 65
             else
-              echo $xlarge_quality
+              echo 55
             fi
           }
-          
-          # Find and convert image files to WebP
-          find . \( -name "*.png" -o -name "*.jpg" -o -name "*.jpeg" -o -name "*.tiff" -o -name "*.bmp" \) -not -path "*/\.git/*" | while read -r img; do
-            # Skip if file doesn't exist
-            [ -f "$img" ] || continue
-            
-            # Generate WebP filename
-            webp_img="${img%.*}.webp"
-            
-            # Determine quality dynamically
-            quality=$(get_quality "$img")
-            
-            # Get image dimensions
-            dimensions=$(identify -format "%wx%h" "$img")
-            
-            # Convert image to WebP with dynamic quality
-            convert "$img" -quality "$quality" -define webp:lossless=false "$webp_img"
 
-            # Print conversion details
-            original_size=$(stat -c%s "$img")
-            webp_size=$(stat -c%s "$webp_img")
-            compression_ratio=$(echo "scale=2; ($original_size - $webp_size) / $original_size * 100" | bc)
+          # Function to sync git deleted files with images directory
+          sync_deleted_files() {
+            echo "Checking for deleted files..."
+            git diff --diff-filter=D --name-only HEAD^ HEAD | while IFS= read -r deleted_file; do
+              # Check if the file is an image
+              if [[ $deleted_file =~ \.(png|jpg|jpeg|tiff|bmp)$ ]]; then
+                base_name=$(basename "$deleted_file")
+                webp_name="${base_name%.*}.webp"
+                
+                # Remove corresponding files from images directory if they exist
+                if [[ -f "images/$base_name" ]]; then
+                  echo "Removing $base_name from images directory"
+                  rm "images/$base_name"
+                fi
+                if [[ -f "images/$webp_name" ]]; then
+                  echo "Removing $webp_name from images directory"
+                  rm "images/$webp_name"
+                fi
+              fi
+            done
+          }
+
+          # Function to process images
+          process_images() {
+            local converted_count=0
+            local skipped_count=0
+            local total_original_size=0
+            local total_webp_size=0
+
+            # Find all image files in the repository (excluding .git and images directory)
+            while IFS= read -r -d '' img; do
+              # Skip if not a regular file or if it's a WebP
+              [[ -f "$img" ]] || continue
+              [[ "$img" == *.webp ]] && continue
+
+              # Get the base filename and directory
+              base_name=$(basename "$img")
+              dir_name=$(dirname "$img")
+              
+              # Skip if this is the images directory
+              [[ "$dir_name" == "images" ]] && continue
+
+              # Generate WebP filename
+              webp_name="${base_name%.*}.webp"
+              
+              # Validate image
+              if ! identify "$img" &>/dev/null; then
+                echo "Skipping invalid image: $img"
+                ((skipped_count++))
+                continue
+              }
+
+              # Get quality and convert
+              quality=$(get_quality "$img")
+              
+              if convert "$img" -quality "$quality" -define webp:lossless=false "images/$webp_name"; then
+                if [[ -f "images/$webp_name" ]]; then
+                  original_size=$(stat -c%s "$img")
+                  webp_size=$(stat -c%s "images/$webp_name")
+                  compression_ratio=$(echo "scale=2; ($original_size - $webp_size) / $original_size * 100" | bc)
+                  
+                  echo "Converted: $img"
+                  echo "  - Original size: $((original_size / 1024)) KB"
+                  echo "  - WebP size: $((webp_size / 1024)) KB"
+                  echo "  - Compression: $compression_ratio%"
+                  
+                  # Move original to images directory and remove from source
+                  mv "$img" "images/$base_name"
+                  
+                  ((converted_count++))
+                  total_original_size=$((total_original_size + original_size))
+                  total_webp_size=$((total_webp_size + webp_size))
+                fi
+              else
+                echo "Conversion failed for: $img"
+                ((skipped_count++))
+              fi
+            done < <(find . -type f \( -name "*.png" -o -name "*.jpg" -o -name "*.jpeg" -o -name "*.tiff" -o -name "*.bmp" \) -not -path "*/\.git/*" -not -path "*/images/*" -print0)
+
+            # Print summary
+            echo ""
+            echo "Conversion Summary:"
+            echo "- Total images converted: $converted_count"
+            echo "- Total skipped images: $skipped_count"
+            echo "- Total original size: $((total_original_size / 1024)) KB"
+            echo "- Total WebP size: $((total_webp_size / 1024)) KB"
             
-            echo "Converted: $img"
-            echo "  - Original size: $(($original_size / 1024)) KB"
-            echo "  - WebP size: $(($webp_size / 1024)) KB"
-            echo "  - Compression: $compression_ratio%"
-            echo "  - Quality: $quality"
-            echo "  - Dimensions: $dimensions"
+            if [[ $total_original_size -gt 0 ]]; then
+              total_compression_ratio=$(echo "scale=2; ($total_original_size - $total_webp_size) / $total_original_size * 100" | bc)
+              echo "- Overall compression: $total_compression_ratio%"
+            fi
 
-            # Remove image
-            rm -Rv "$img"
+            return $converted_count
+          }
 
-            # Copy image to online storage
-            cp "$webp_img" "images/"
-          done
+          # Main execution
+          echo "Syncing deleted files..."
+          sync_deleted_files
 
-      - name: Commit converted images
+          echo "Processing images..."
+          process_images
+
+      - name: Commit changes
         run: |
           git config --local user.email "action@github.com"
           git config --local user.name "GitHub Action"
-          git add --all
-          git diff-index --quiet HEAD || git commit -m "Convert images to WebP with intelligent compression"
-          git push
+          git add images/
+          if [[ -n "$(git status --porcelain)" ]]; then
+            git commit -m "Update images directory with WebP conversions"
+            git push
+          else
+            echo "No changes to commit"
+          fi
