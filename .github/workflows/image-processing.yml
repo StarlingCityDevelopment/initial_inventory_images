@@ -82,7 +82,9 @@ jobs:
             rm -Rv "$img"
           done
 
-          mv *.webp images/
+          find . -name "*.webp" -not -path "*/\.git/*" | while read -r img; do
+            mv "$img" images/
+          done
 
       - name: Commit converted images
         run: |
