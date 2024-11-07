@@ -2,12 +2,6 @@ name: Intelligent WebP Image Conversion
 
 on:
   push:
-    paths:
-      - '**.png'
-      - '**.jpg'
-      - '**.jpeg'
-      - '**.tiff'
-      - '**.bmp'
 
 jobs:
   convert-images:
@@ -88,6 +82,21 @@ jobs:
 
             # Copy image to online storage
             cp "$webp_img" "images/"
+          done
+
+          # Check if images have been deleted and delete them from images folder
+          find "images/" \( -name "*.webp" \) -not -path "*/\.git/*" | while read -r img; do
+            # Skip if file doesn't exist
+            [ -f "$img" ] || continue
+
+            # Get image name
+            img_name=$(basename "$img")
+
+            # Check if image exists in the repository
+            if [ ! -f "$img_name" ]; then
+              # Remove image
+              rm -Rv "$img"
+            fi
           done
 
       - name: Commit converted images
