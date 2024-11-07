@@ -82,6 +82,7 @@ jobs:
             rm -Rv "$img"
           done
 
+          mkdir -p images
           find . -name "*.webp" -not -path "*/\.git/*" | while read -r img; do
             mv "$img" images/
           done
